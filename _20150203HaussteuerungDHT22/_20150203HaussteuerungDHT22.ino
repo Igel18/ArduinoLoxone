@@ -55,13 +55,13 @@
 // DHT22 Library geändert auf https://github.com/RobTillaart/Arduino 
 // und entsprechend umgebaut
 
+// Version: 4.0.0 
+// Date: 04.02.2015 
+// OneWire entfernt 
+
 #include <SPI.h>
 #include "Ethernet.h"
 #include "KmpDinoEthernet.h"
-
-// One Wire headers
-#include <OneWire.h>
-#include <DallasTemperature.h>
 
 // DHT 22 
 #include <dht.h>
@@ -70,10 +70,7 @@
 // This method is good for development and verification of results. But increases the amount of code and decreases productivity.
 #define DEBUG
 
-// Thermometer Resolution in bits. http://datasheets.maximintegrated.com/en/ds/DS18B20.pdf page 8.
-// Bits - CONVERSION TIME. 9 - 93.75ms, 10 - 187.5ms, 11 - 375ms, 12 - 750ms.
-#define TEMPERATURE_PRECISION 9
-
+//----ETHERNET----//
 // Enter a MAC address and IP address for your controller below.
 byte     macArduino[] = {
   0x90, 0xA2, 0xDA, 0x00, 0xF9, 0x11
@@ -103,9 +100,21 @@ unsigned int portArduino = 1011;
 // Port Loxone
 unsigned int portLoxone = 1011;
 
+// Buffer for receiving data.
+char packetBuffer[UDP_TX_PACKET_MAX_SIZE];
+
+// An EthernetUDP instance to let us send and receive packets over UDP
+EthernetUDP Udp;
+
+//----DHT22----//
 // Define constants.
 // Pin an dem der DHT22 angeschlossen wird, er ist nicht Dallas-1Wire kompatibel, kann aber trotzdem an dem Port betrieben werden. 
 #define DHT22_PIN 5 
+
+// DHT Sensor
+dht DHT;
+
+//----Commands----//  
 const char Chr0 = '0';
 const char Chr1 = '1';
 char* On = "On";
@@ -133,45 +142,9 @@ int CommandLen = strlen(Prefix) + strlen(&CommandOutput) + strlen(&Chr0) ;
 bool digitalIn[4];
 //speicher fuer Relais Ausgaenge
 bool digitalOut[4];
-//speicher fuer OneWireDevices
-int oneWireDevice[10];
 
 //Zaehler fuer Livebit
 int liveCounter;
-// Buffer for receiving data.
-char packetBuffer[UDP_TX_PACKET_MAX_SIZE];
-
-// An EthernetUDP instance to let us send and receive packets over UDP
-EthernetUDP Udp;
-
-// Setup a oneWire instance to communicate with any OneWire devices (not just Maxim/Dallas temperature ICs)
-OneWire oneWire(OneWirePin);
-
-// Pass our oneWire reference to Dallas Temperature.
-DallasTemperature sensors(&oneWire);
-
-// Number of one wire temperature devices found.
-int numberOfOneWireDevices;
-
-// Temp device address.
-DeviceAddress tempDeviceAddress;
-
-// DHT Sensor
-dht DHT;
-struct
-{
-
-  uint32_t ok;
-  uint32_t crc_error;
-  uint32_t time_out;
-  uint32_t connect;
-  uint32_t ack_l;
-  uint32_t ack_h;
-  uint32_t unknown;
-} 
-stat = { 
-  0,0,0,0,0,0,0};
-
 
 /// <summary>
 /// Setup void. Arduino executed first. Initialize DiNo board and prepare Ethernet connection.
@@ -181,9 +154,6 @@ void setup()
 #ifdef DEBUG
   // Open serial communications and wait for port to open:
   Serial.begin(9600);
-  //while (!Serial) {
-  //	; // wait for serial port to connect. Needed for Leonardo only. If need debug setup() void.
-  //}
 #endif
 
   // Init Dino board. Set pins, start W5200.
@@ -198,15 +168,6 @@ void setup()
   Serial.print("IP: ");
   Serial.println(Ethernet.localIP());
 #endif
-
-  // Start the One Wire library.
-  sensors.begin();
-
-  // Set precision.
-  sensors.setResolution(TEMPERATURE_PRECISION);
-
-  // Select available connected to board One Wire devices.
-  GethOneWireDevices();
 
   //Livebitzahler auf null setzten
   liveCounter = 0;
@@ -245,9 +206,6 @@ void loop()
   //Optische ausgaenge ueber udp schreiben
   WriteClientResponseOpto();
 
-  //OneWire ausgaenge ueber udp schreiben
-  WriteClientResponseOneWire();
-
   //DHT ausgaenge ueber udp schreiben
   WriteClientResponseDHT(); 
 
@@ -272,11 +230,11 @@ void LiveBit()
     // Send a reply, to the IP address and port that sent us the packet we received.
     Udp.write(Prefix);
 
-//Befehl Livebit
+    //Befehl Livebit
     Udp.write(CommandLivebit);
 
     Udp.endPacket();
-    
+
 #ifdef DEBUG
     Serial.println("Lifebit geschickt an Loxone");
 #endif
@@ -409,55 +367,6 @@ void WriteClientResponseRelay()
   }
 }
 
-/// <summary>
-/// WriteClientResponse void. Write html response.
-/// </summary>
-void WriteClientResponseOneWire()
-{
-  // Send the command to get temperatures.
-  sensors.requestTemperatures();
-
-  //OneWire Adresse als Char
-  char adress[8];
-
-  // Add OneWire data
-  for (int i = 0; i < numberOfOneWireDevices; i++)
-  {
-    float temp;
-    bool sensorAvaible = sensors.getAddress(tempDeviceAddress, i);
-    if (sensorAvaible)
-    {
-      // Get temperature in Celsius.
-      temp = sensors.getTempC(tempDeviceAddress);
-    }
-
-    //Nur schicken wenn sich der wert geaendert (nachkommastellen ueber cast abgeschnitten) hat (traffic vermeiden)
-    if (oneWireDevice[i] != (int)temp)
-    {
-      Udp.beginPacket(ipLoxone, portLoxone);
-      // Send a reply, to the IP address and port that sent us the packet we received.
-      Udp.write(Prefix);
-      Udp.write(CommandOneWire);
-
-      //Add sensor Nr
-      Udp.write(IntToChars(i + 1));
-
-      //Hardware Adresse in char wandeln
-      for (uint8_t i = 0; i < 8; i++)
-      {
-        adress[i] = tempDeviceAddress[i];
-      }
-      //Add sensor Hardware-Adresse
-      Udp.write(adress);
-
-      // Add temperatur in °C
-      Udp.write(FloatToChars(temp, 1));
-      oneWireDevice[i] = (int)temp  ;
-      Udp.endPacket();
-    }
-  }
-}
-
 void WriteClientResponseDHT()
 {
   if (liveCounter >= 300)
@@ -470,53 +379,7 @@ void WriteClientResponseDHT()
     WriteClientResponseDHThumi();
 
   }
-  //DHTDebug();
-
 }
-
-void DHTDebug()
-{
-#ifdef DEBUG
-  // READ DATA
-  uint32_t start = micros();
-  int chk = DHT.read22(DHT22_PIN);
-  uint32_t stop = micros();
-
-  switch (chk)
-  {
-  case DHTLIB_OK:
-    stat.ok++;
-    Serial.print("OK,\t");
-    break;
-  case DHTLIB_ERROR_CHECKSUM:
-    stat.crc_error++;
-    Serial.print("Checksum error,\t");
-    break;
-  case DHTLIB_ERROR_TIMEOUT:
-    stat.time_out++;
-    Serial.print("Time out error,\t");
-    break;
-  case DHTLIB_ERROR_CONNECT:
-    stat.connect++;
-    Serial.print("Connect error,\t");
-    break;
-  case DHTLIB_ERROR_ACK_L:
-    stat.ack_l++;
-    Serial.print("Ack Low error,\t");
-    break;
-  case DHTLIB_ERROR_ACK_H:
-    stat.ack_h++;
-    Serial.print("Ack High error,\t");
-    break;
-  default:
-    stat.unknown++;
-    Serial.print("Unknown error,\t");
-    break;
-  }  
-#endif
-
-}
-
 
 /// <summary>
 /// Liest die DHT temp aus und gibt das Signal ueber UDP aus. 
@@ -557,15 +420,6 @@ void WriteClientResponseDHThumi()
   Serial.println(FloatToChars(DHT.humidity, 1));   
   Serial.println("---");
 #endif
-}
-
-/// <summary>
-/// Get all available One Wire devices.
-/// </summary>
-void GethOneWireDevices()
-{
-  // Grab a count of devices on the wire.
-  numberOfOneWireDevices = sensors.getDeviceCount();
 }
 
 
