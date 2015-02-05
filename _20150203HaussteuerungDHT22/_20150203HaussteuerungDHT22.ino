@@ -59,6 +59,10 @@
 // Date: 04.02.2015 
 // OneWire entfernt 
 
+// Version: 4.0.1 
+// Date: 05.02.2015 
+// On/Off Led immer Off zum Stromsparen
+
 #include <SPI.h>
 #include "Ethernet.h"
 #include "KmpDinoEthernet.h"
@@ -69,6 +73,11 @@
 // If in debug mode - print debug information in Serial. Comment in production code, this bring performance.
 // This method is good for development and verification of results. But increases the amount of code and decreases productivity.
 #define DEBUG
+
+// Define constants.
+// Pin an dem der DHT22 angeschlossen wird, er ist nicht Dallas-1Wire kompatibel, kann aber trotzdem an dem Port betrieben werden. 
+#define DHT22_PIN 5 
+
 
 //----ETHERNET----//
 // Enter a MAC address and IP address for your controller below.
@@ -107,20 +116,16 @@ char packetBuffer[UDP_TX_PACKET_MAX_SIZE];
 EthernetUDP Udp;
 
 //----DHT22----//
-// Define constants.
-// Pin an dem der DHT22 angeschlossen wird, er ist nicht Dallas-1Wire kompatibel, kann aber trotzdem an dem Port betrieben werden. 
-#define DHT22_PIN 5 
-
 // DHT Sensor
 dht DHT;
 
 //----Commands----//  
 const char Chr0 = '0';
 const char Chr1 = '1';
-char* On = "On";
-char* Off = "Off";
+const char* On = "On";
+const char* Off = "Off";
 // mit diesem Praefix wird ein Datenpaket erkannt
-char* Prefix = "FF";
+const char* Prefix = "FF";
 //Opto Out Command
 const char CommandInput = 'I';
 //Relay Command
@@ -145,6 +150,8 @@ bool digitalOut[4];
 
 //Zaehler fuer Livebit
 int liveCounter;
+int maxCounter = 500; 
+
 
 /// <summary>
 /// Setup void. Arduino executed first. Initialize DiNo board and prepare Ethernet connection.
@@ -191,7 +198,7 @@ void loop()
 #endif
 
   // If client connected On status led.
-  OnStatusLed();
+  //OnStatusLed();
 
   //Wenn Pakete ueber UDP kommen ist es idR. fuer das Relay-> Lesen
   if (packetSize)
@@ -223,7 +230,7 @@ void LiveBit()
 {
   liveCounter++;
   //Da eine zykluszeit von 10ms programmiert ist
-  if (liveCounter >=  300)
+  if (liveCounter >=  maxCounter)
   {
     //Udp Paket schicken
     Udp.beginPacket(ipLoxone, portLoxone);
@@ -241,15 +248,15 @@ void LiveBit()
   }
 
 #ifdef DEBUG
-  Serial.print("Live Counter: ");
-  Serial.println(liveCounter);
-  Serial.println("---");
+  //Serial.print("Live Counter: ");
+  //Serial.println(liveCounter);
+  //Serial.println("---");
 #endif
 }
 
 void LiveBitReset()
 {
-  if (liveCounter >=  300)
+  if (liveCounter >=  maxCounter)
   {
     //Zaehler zuruecksetzen
     liveCounter = 0;  
@@ -357,7 +364,9 @@ void WriteClientResponseRelay()
       // Response write.
       Udp.write(CommandOutput);
       //Add Relais Nr
-      Udp.write(IntToChars(i + 1));
+      int tmp=i+1;
+      Udp.write(tmp);
+      //Udp.write(IntToChars(i + 1));
       //GetRealyStatus(0-3)
       Udp.write(GetRelayStatus(i) ? Chr1 : Chr0);
       //Wert Speichern
@@ -369,15 +378,14 @@ void WriteClientResponseRelay()
 
 void WriteClientResponseDHT()
 {
-  if (liveCounter >= 300)
+  if (liveCounter >= maxCounter)
   {
 #ifdef DEBUG
-    Serial.print("DHT22, \t");
+    Serial.println("DHT22");
 #endif
-
+    int chk = DHT.read22(DHT22_PIN);
     WriteClientResponseDHTtemp();
     WriteClientResponseDHThumi();
-
   }
 }
 
@@ -392,12 +400,17 @@ void WriteClientResponseDHTtemp()
   Udp.write(CommandDHTtemp);
 
   // Add temperatur in °C
-  Udp.write(FloatToChars(DHT.temperature, 1));
+  char buf[5];
+  dtostrf(DHT.temperature, 2, 3, buf);
+  Udp.write(buf);
+  //Udp.write(FloatToChars(DHT.temperature, 1));
+  
   Udp.endPacket();
 
 #ifdef DEBUG
   Serial.println("Temperature in C: ");
-  Serial.println(FloatToChars(DHT.temperature, 1));
+  Serial.println(buf);
+ // Serial.println(FloatToChars(DHT.temperature, 1));
 #endif
 }
 
@@ -412,12 +425,17 @@ void WriteClientResponseDHThumi()
   Udp.write(CommandDHThumi);
 
   // Add Humidity in %
-  Udp.write(FloatToChars(DHT.humidity, 1));
+  char buf[5];
+  dtostrf(DHT.humidity, 2, 3, buf);
+  Udp.write(buf);
+  //Udp.write(DHT.humidity,1);
+  //Udp.write(FloatToChars(DHT.humidity, 1));
   Udp.endPacket();
 
 #ifdef DEBUG
   Serial.println("Luftfeuchte in %: ");
-  Serial.println(FloatToChars(DHT.humidity, 1));   
+  Serial.println(buf);   
+  //Serial.println(FloatToChars(DHT.humidity, 1));  
   Serial.println("---");
 #endif
 }
